@@ -67,6 +67,24 @@
           </div>
         </section>
 
+        <!-- 缩放控制 -->
+        <section class="section" v-if="originalImage">
+          <h2>4️⃣ 调整图片</h2>
+          <div class="zoom-control">
+            <button class="zoom-btn" @click="zoomOut" :disabled="zoom <= 0.5">➖</button>
+            <input
+              type="range"
+              class="zoom-slider"
+              min="0.5"
+              max="3"
+              step="0.1"
+              v-model.number="zoom"
+            />
+            <button class="zoom-btn" @click="zoomIn" :disabled="zoom >= 3">➕</button>
+          </div>
+          <p class="hint">💡 也可以使用鼠标滚轮缩放，拖动图片调整位置</p>
+        </section>
+
         <!-- 操作按钮 -->
         <section class="section" v-if="originalImage && !isProcessing">
           <button class="process-btn" @click="processImage">
@@ -88,7 +106,7 @@
       <div class="right-panel">
         <section class="preview-section">
           <h2>📋 预览效果</h2>
-          <div class="preview-container">
+          <div class="preview-container" ref="previewContainer">
             <canvas ref="previewCanvas"></canvas>
           </div>
           <div class="preview-info" v-if="selectedScene">
@@ -114,7 +132,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { removeBackground } from '@imgly/background-removal'
 
 // 场景预设
@@ -147,10 +165,22 @@ const isDragging = ref(false)
 const isProcessing = ref(false)
 const processingText = ref('')
 
+// 缩放和拖动状态
+const zoom = ref(1)
+const offsetX = ref(0)
+const offsetY = ref(0)
+const isPanning = ref(false)
+const lastMouseX = ref(0)
+const lastMouseY = ref(0)
+
 // Canvas
 const previewCanvas = ref(null)
+const previewContainer = ref(null)
 let canvas = null
 let ctx = null
+
+// 图片对象
+let imgElement = null
 
 // 计算属性
 const currentDimensions = computed(() => {
@@ -169,21 +199,131 @@ onMounted(() => {
   if (previewCanvas.value) {
     canvas = previewCanvas.value
     ctx = canvas.getContext('2d')
-    canvas.width = currentDimensions.value.width
-    canvas.height = currentDimensions.value.height
+    updateCanvasSize()
     renderPreview()
+    
+    // 添加事件监听
+    canvas.addEventListener('wheel', handleWheel, { passive: false })
+    canvas.addEventListener('mousedown', handleMouseDown)
+    canvas.addEventListener('mousemove', handleMouseMove)
+    canvas.addEventListener('mouseup', handleMouseUp)
+    canvas.addEventListener('mouseleave', handleMouseUp)
+    
+    // 触摸事件
+    canvas.addEventListener('touchstart', handleTouchStart, { passive: false })
+    canvas.addEventListener('touchmove', handleTouchMove, { passive: false })
+    canvas.addEventListener('touchend', handleTouchEnd)
   }
 })
+
+onUnmounted(() => {
+  if (canvas) {
+    canvas.removeEventListener('wheel', handleWheel)
+    canvas.removeEventListener('mousedown', handleMouseDown)
+    canvas.removeEventListener('mousemove', handleMouseMove)
+    canvas.removeEventListener('mouseup', handleMouseUp)
+    canvas.removeEventListener('mouseleave', handleMouseUp)
+    canvas.removeEventListener('touchstart', handleTouchStart)
+    canvas.removeEventListener('touchmove', handleTouchMove)
+    canvas.removeEventListener('touchend', handleTouchEnd)
+  }
+})
+
+// 更新 Canvas 大小
+function updateCanvasSize() {
+  if (!canvas || !selectedScene.value) return
+  const preset = presets[selectedScene.value]
+  canvas.width = preset.width
+  canvas.height = preset.height
+}
+
+// 缩放控制
+function zoomIn() {
+  zoom.value = Math.min(3, zoom.value + 0.1)
+  renderPreview()
+}
+
+function zoomOut() {
+  zoom.value = Math.max(0.5, zoom.value - 0.1)
+  renderPreview()
+}
+
+// 滚轮缩放
+function handleWheel(e) {
+  e.preventDefault()
+  const delta = e.deltaY > 0 ? -0.05 : 0.05
+  zoom.value = Math.max(0.5, Math.min(3, zoom.value + delta))
+  renderPreview()
+}
+
+// 鼠标拖动
+function handleMouseDown(e) {
+  if (!originalImage.value) return
+  isPanning.value = true
+  lastMouseX.value = e.clientX
+  lastMouseY.value = e.clientY
+  canvas.style.cursor = 'grabbing'
+}
+
+function handleMouseMove(e) {
+  if (!isPanning.value || !originalImage.value) return
+  
+  const dx = e.clientX - lastMouseX.value
+  const dy = e.clientY - lastMouseY.value
+  
+  offsetX.value += dx
+  offsetY.value += dy
+  
+  lastMouseX.value = e.clientX
+  lastMouseY.value = e.clientY
+  
+  renderPreview()
+}
+
+function handleMouseUp() {
+  isPanning.value = false
+  if (canvas) {
+    canvas.style.cursor = 'grab'
+  }
+}
+
+// 触摸事件
+function handleTouchStart(e) {
+  if (!originalImage.value) return
+  e.preventDefault()
+  const touch = e.touches[0]
+  isPanning.value = true
+  lastMouseX.value = touch.clientX
+  lastMouseY.value = touch.clientY
+}
+
+function handleTouchMove(e) {
+  if (!isPanning.value || !originalImage.value) return
+  e.preventDefault()
+  const touch = e.touches[0]
+  
+  const dx = touch.clientX - lastMouseX.value
+  const dy = touch.clientY - lastMouseY.value
+  
+  offsetX.value += dx
+  offsetY.value += dy
+  
+  lastMouseX.value = touch.clientX
+  lastMouseY.value = touch.clientY
+  
+  renderPreview()
+}
+
+function handleTouchEnd() {
+  isPanning.value = false
+}
 
 // 选择场景
 function selectScene(key) {
   selectedScene.value = key
   selectedBgColor.value = presets[key].bg
-  if (canvas) {
-    canvas.width = presets[key].width
-    canvas.height = presets[key].height
-    renderPreview()
-  }
+  updateCanvasSize()
+  renderPreview()
 }
 
 // 文件上传
@@ -204,7 +344,24 @@ function loadImage(file) {
   reader.onload = (e) => {
     originalImage.value = e.target.result
     processedImage.value = null
-    renderPreview()
+    
+    // 重置缩放和偏移
+    zoom.value = 1
+    offsetX.value = 0
+    offsetY.value = 0
+    
+    // 加载图片获取尺寸
+    imgElement = new Image()
+    imgElement.onload = () => {
+      // 自动调整初始缩放比例
+      const scale = Math.min(
+        canvas.width / imgElement.width,
+        canvas.height / imgElement.height
+      ) * 0.8
+      zoom.value = scale
+      renderPreview()
+    }
+    imgElement.src = originalImage.value
   }
   reader.readAsDataURL(file)
 }
@@ -217,7 +374,6 @@ async function processImage() {
   processingText.value = '正在加载 AI 模型...'
   
   try {
-    // 将 base64 转为 blob
     const response = await fetch(originalImage.value)
     const blob = await response.blob()
     
@@ -229,7 +385,14 @@ async function processImage() {
     })
     
     processedImage.value = URL.createObjectURL(removedBg)
-    renderPreview()
+    
+    // 加载抠图后的图片
+    const processedImg = new Image()
+    processedImg.onload = () => {
+      imgElement = processedImg
+      renderPreview()
+    }
+    processedImg.src = processedImage.value
   } catch (error) {
     console.error('处理失败:', error)
     alert('处理失败，请重试')
@@ -249,44 +412,33 @@ function renderPreview() {
   ctx.fillStyle = selectedBgColor.value
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   
-  // 如果有抠图，显示抠图结果
-  if (processedImage.value) {
-    const img = new Image()
-    img.onload = () => {
-      // 计算缩放比例，居中显示
-      const scale = Math.min(
-        canvas.width / img.width,
-        canvas.height / img.height
-      ) * 0.9
-      const newWidth = img.width * scale
-      const newHeight = img.height * scale
-      const x = (canvas.width - newWidth) / 2
-      const y = (canvas.height - newHeight) / 2
-      ctx.drawImage(img, x, y, newWidth, newHeight)
+  // 绘制裁剪框（半透明遮罩）
+  if (originalImage.value) {
+    // 计算图片在画布中的位置和大小
+    const img = imgElement || new Image()
+    const imgWidth = (img.width || 100) * zoom.value
+    const imgHeight = (img.height || 100) * zoom.value
+    const imgX = (canvas.width - imgWidth) / 2 + offsetX.value
+    const imgY = (canvas.height - imgHeight) / 2 + offsetY.value
+    
+    // 如果有图片，绘制图片
+    if (processedImage.value || originalImage.value) {
+      const src = processedImage.value || originalImage.value
+      const drawImg = new Image()
+      drawImg.onload = () => {
+        ctx.drawImage(drawImg, imgX, imgY, imgWidth, imgHeight)
+      }
+      drawImg.src = src
     }
-    img.src = processedImage.value
-  } else if (originalImage.value) {
-    // 显示原图预览（半透明）
-    const img = new Image()
-    img.onload = () => {
-      const scale = Math.min(
-        canvas.width / img.width,
-        canvas.height / img.height
-      ) * 0.8
-      const newWidth = img.width * scale
-      const newHeight = img.height * scale
-      const x = (canvas.width - newWidth) / 2
-      const y = (canvas.height - newHeight) / 2
-      ctx.globalAlpha = 0.5
-      ctx.drawImage(img, x, y, newWidth, newHeight)
-      ctx.globalAlpha = 1.0
-    }
-    img.src = originalImage.value
   }
 }
 
-// 监听背景色变化
-watch(selectedBgColor, () => {
+// 监听变化
+watch([selectedBgColor, zoom], () => {
+  renderPreview()
+})
+
+watch([offsetX, offsetY], () => {
   renderPreview()
 })
 
@@ -468,6 +620,62 @@ function downloadImage() {
   text-shadow: 0 0 3px black;
 }
 
+/* 缩放控制 */
+.zoom-control {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.zoom-btn {
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.zoom-btn:hover:not(:disabled) {
+  transform: scale(1.1);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+}
+
+.zoom-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.zoom-slider {
+  flex: 1;
+  height: 8px;
+  border-radius: 4px;
+  background: #e0e0e0;
+  outline: none;
+  -webkit-appearance: none;
+}
+
+.zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  cursor: pointer;
+}
+
+.zoom-slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  cursor: pointer;
+  border: none;
+}
+
 /* 处理按钮 */
 .process-btn, .download-btn {
   width: 100%;
@@ -535,11 +743,18 @@ function downloadImage() {
   justify-content: center;
   align-items: center;
   min-height: 400px;
+  overflow: hidden;
 }
 
 canvas {
   max-width: 100%;
   box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  cursor: grab;
+  touch-action: none;
+}
+
+canvas:active {
+  cursor: grabbing;
 }
 
 .preview-info {
