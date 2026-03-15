@@ -52,7 +52,7 @@
         </section>
 
         <!-- 背景色选择 -->
-        <section class="section" v-if="processedImage">
+        <section class="section" v-if="processedImage || originalImage">
           <h2>3️⃣ 选择背景色</h2>
           <div class="color-grid">
             <button
@@ -67,45 +67,10 @@
           </div>
         </section>
 
-        <!-- 服装选择 -->
-        <section class="section" v-if="processedImage">
-          <h2>4️⃣ 选择服装（可选）</h2>
-          <div class="clothing-grid">
-            <button
-              :class="['clothing-btn', { active: !selectedClothing }]"
-              @click="selectedClothing = null"
-            >
-              <span>🚫</span>
-              <span>无</span>
-            </button>
-            <button
-              :class="['clothing-btn', { active: selectedClothing === 'suit-black' }]"
-              @click="selectedClothing = 'suit-black'"
-            >
-              <span>👔</span>
-              <span>黑色西装</span>
-            </button>
-            <button
-              :class="['clothing-btn', { active: selectedClothing === 'suit-blue' }]"
-              @click="selectedClothing = 'suit-blue'"
-            >
-              <span>👔</span>
-              <span>蓝色西装</span>
-            </button>
-            <button
-              :class="['clothing-btn', { active: selectedClothing === 'shirt-white' }]"
-              @click="selectedClothing = 'shirt-white'"
-            >
-              <span>👕</span>
-              <span>白色衬衫</span>
-            </button>
-          </div>
-        </section>
-
         <!-- 操作按钮 -->
         <section class="section" v-if="originalImage && !isProcessing">
           <button class="process-btn" @click="processImage">
-            🚀 开始制作
+            🚀 {{ processedImage ? '重新制作' : '开始制作' }}
           </button>
         </section>
 
@@ -149,9 +114,8 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
-import imglyRemoveBackground from '@imgly/background-removal'
-import { fabric } from 'fabric'
+import { ref, computed, watch, onMounted } from 'vue'
+import { removeBackground } from '@imgly/background-removal'
 
 // 场景预设
 const presets = {
@@ -177,12 +141,16 @@ const backgroundColors = [
 // 状态
 const selectedScene = ref('id-card')
 const selectedBgColor = ref('#ffffff')
-const selectedClothing = ref(null)
 const originalImage = ref(null)
 const processedImage = ref(null)
 const isDragging = ref(false)
 const isProcessing = ref(false)
 const processingText = ref('')
+
+// Canvas
+const previewCanvas = ref(null)
+let canvas = null
+let ctx = null
 
 // 计算属性
 const currentDimensions = computed(() => {
@@ -196,11 +164,24 @@ const currentBgColorName = computed(() => {
   return color ? color.name : '自定义'
 })
 
+// 初始化 Canvas
+onMounted(() => {
+  if (previewCanvas.value) {
+    canvas = previewCanvas.value
+    ctx = canvas.getContext('2d')
+    canvas.width = currentDimensions.value.width
+    canvas.height = currentDimensions.value.height
+    renderPreview()
+  }
+})
+
 // 选择场景
 function selectScene(key) {
   selectedScene.value = key
   selectedBgColor.value = presets[key].bg
-  if (originalImage.value) {
+  if (canvas) {
+    canvas.width = presets[key].width
+    canvas.height = presets[key].height
     renderPreview()
   }
 }
@@ -241,7 +222,7 @@ async function processImage() {
     const blob = await response.blob()
     
     processingText.value = '正在 AI 抠图...'
-    const removedBg = await imglyRemoveBackground(blob, {
+    const removedBg = await removeBackground(blob, {
       progress: (key, current, total) => {
         processingText.value = `正在处理：${Math.round((current / total) * 100)}%`
       }
@@ -258,66 +239,55 @@ async function processImage() {
 }
 
 // 渲染预览
-let canvas = null
-
 function renderPreview() {
-  if (!canvas) {
-    canvas = new fabric.Canvas('previewCanvas', {
-      width: currentDimensions.value.width,
-      height: currentDimensions.value.height
-    })
-  }
+  if (!ctx || !canvas) return
   
-  canvas.setWidth(currentDimensions.value.width)
-  canvas.setHeight(currentDimensions.value.height)
-  canvas.clear()
+  // 清空画布
+  ctx.clearRect(0, 0, canvas.width, canvas.height)
   
-  // 填充背景
-  const bgColor = selectedBgColor.value
-  canvas.backgroundColor = bgColor
+  // 填充背景色
+  ctx.fillStyle = selectedBgColor.value
+  ctx.fillRect(0, 0, canvas.width, canvas.height)
   
-  // 如果已有抠图，显示抠图结果
+  // 如果有抠图，显示抠图结果
   if (processedImage.value) {
-    fabric.Image.fromURL(processedImage.value, (img) => {
-      // 缩放并居中
+    const img = new Image()
+    img.onload = () => {
+      // 计算缩放比例，居中显示
       const scale = Math.min(
-        currentDimensions.value.width / img.width,
-        currentDimensions.value.height / img.height
+        canvas.width / img.width,
+        canvas.height / img.height
       ) * 0.9
-      img.scale(scale)
-      img.set({
-        left: currentDimensions.value.width / 2,
-        top: currentDimensions.value.height / 2,
-        originX: 'center',
-        originY: 'center'
-      })
-      canvas.add(img)
-      canvas.renderAll()
-    })
+      const newWidth = img.width * scale
+      const newHeight = img.height * scale
+      const x = (canvas.width - newWidth) / 2
+      const y = (canvas.height - newHeight) / 2
+      ctx.drawImage(img, x, y, newWidth, newHeight)
+    }
+    img.src = processedImage.value
   } else if (originalImage.value) {
-    // 显示原图预览
-    fabric.Image.fromURL(originalImage.value, (img) => {
+    // 显示原图预览（半透明）
+    const img = new Image()
+    img.onload = () => {
       const scale = Math.min(
-        currentDimensions.value.width / img.width,
-        currentDimensions.value.height / img.height
+        canvas.width / img.width,
+        canvas.height / img.height
       ) * 0.8
-      img.scale(scale)
-      img.set({
-        left: currentDimensions.value.width / 2,
-        top: currentDimensions.value.height / 2,
-        originX: 'center',
-        originY: 'center',
-        opacity: 0.5
-      })
-      canvas.add(img)
-      canvas.renderAll()
-    })
+      const newWidth = img.width * scale
+      const newHeight = img.height * scale
+      const x = (canvas.width - newWidth) / 2
+      const y = (canvas.height - newHeight) / 2
+      ctx.globalAlpha = 0.5
+      ctx.drawImage(img, x, y, newWidth, newHeight)
+      ctx.globalAlpha = 1.0
+    }
+    img.src = originalImage.value
   }
 }
 
-// 监听变化重新渲染
-watch([selectedScene, selectedBgColor, processedImage], () => {
-  setTimeout(renderPreview, 100)
+// 监听背景色变化
+watch(selectedBgColor, () => {
+  renderPreview()
 })
 
 // 下载图片
@@ -326,7 +296,7 @@ function downloadImage() {
   
   const link = document.createElement('a')
   link.download = `证件照-${presets[selectedScene.value].name}-${Date.now()}.png`
-  link.href = canvas.toDataURL({ format: 'png', quality: 1.0 })
+  link.href = canvas.toDataURL('image/png')
   link.click()
 }
 </script>
@@ -496,43 +466,6 @@ function downloadImage() {
   color: white;
   font-size: 1.5rem;
   text-shadow: 0 0 3px black;
-}
-
-/* 服装选择 */
-.clothing-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 10px;
-}
-
-.clothing-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 15px 10px;
-  border: 2px solid #e0e0e0;
-  border-radius: 8px;
-  background: white;
-  cursor: pointer;
-  transition: all 0.2s;
-}
-
-.clothing-btn:hover {
-  border-color: #667eea;
-}
-
-.clothing-btn.active {
-  border-color: #667eea;
-  background: rgba(102, 126, 234, 0.1);
-}
-
-.clothing-btn span:first-child {
-  font-size: 1.5rem;
-  margin-bottom: 5px;
-}
-
-.clothing-btn span:last-child {
-  font-size: 0.85rem;
 }
 
 /* 处理按钮 */
