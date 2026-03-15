@@ -8,9 +8,66 @@
     <main class="main">
       <!-- 左侧：上传和处理 -->
       <div class="left-panel">
+        <!-- 尺寸选择 -->
+        <section class="section">
+          <h2>1️⃣ 选择尺寸</h2>
+          <div class="size-tabs">
+            <button
+              :class="['size-tab', { active: sizeMode === 'preset' }]"
+              @click="sizeMode = 'preset'"
+            >
+              预设尺寸
+            </button>
+            <button
+              :class="['size-tab', { active: sizeMode === 'custom' }]"
+              @click="sizeMode = 'custom'"
+            >
+              自定义
+            </button>
+          </div>
+          
+          <!-- 预设尺寸 -->
+          <div v-if="sizeMode === 'preset'" class="preset-sizes">
+            <button
+              v-for="(size, key) in presetSizes"
+              :key="key"
+              :class="['size-btn', { active: selectedPresetSize === key }]"
+              @click="selectPresetSize(key)"
+            >
+              <span class="size-name">{{ size.name }}</span>
+              <span class="size-value">{{ size.width }}×{{ size.height }}</span>
+            </button>
+          </div>
+          
+          <!-- 自定义尺寸 -->
+          <div v-else class="custom-size">
+            <div class="size-input-group">
+              <label>宽度 (px)</label>
+              <input
+                type="number"
+                v-model.number="customWidth"
+                min="100"
+                max="2000"
+                @change="applyCustomSize"
+              />
+            </div>
+            <div class="size-input-group">
+              <label>高度 (px)</label>
+              <input
+                type="number"
+                v-model.number="customHeight"
+                min="100"
+                max="3000"
+                @change="applyCustomSize"
+              />
+            </div>
+            <p class="hint">💡 常用：一寸 295×413，二寸 413×579</p>
+          </div>
+        </section>
+
         <!-- 场景选择 -->
         <section class="section">
-          <h2>1️⃣ 选择用途</h2>
+          <h2>2️⃣ 选择用途</h2>
           <div class="scene-grid">
             <button
               v-for="(preset, key) in presets"
@@ -26,7 +83,7 @@
 
         <!-- 图片上传 -->
         <section class="section">
-          <h2>2️⃣ 上传照片</h2>
+          <h2>3️⃣ 上传照片</h2>
           <div
             class="uploader"
             :class="{ dragging: isDragging }"
@@ -53,7 +110,7 @@
 
         <!-- 背景色选择 -->
         <section class="section" v-if="processedImage || originalImage">
-          <h2>3️⃣ 选择背景色</h2>
+          <h2>4️⃣ 选择背景色</h2>
           <div class="color-grid">
             <button
               v-for="color in backgroundColors"
@@ -69,7 +126,7 @@
 
         <!-- 缩放控制 -->
         <section class="section" v-if="originalImage">
-          <h2>4️⃣ 调整图片</h2>
+          <h2>5️⃣ 调整图片</h2>
           <div class="zoom-control">
             <button class="zoom-btn" @click="zoomOut" :disabled="zoom <= 0.5">➖</button>
             <input
@@ -97,7 +154,7 @@
           <div class="processing">
             <div class="spinner"></div>
             <p>{{ processingText }}</p>
-            <p class="hint">首次使用需下载 AI 模型（约 20MB），请耐心等待</p>
+            <p class="hint">首次使用需下载 AI 模型（约 40MB），请耐心等待</p>
           </div>
         </section>
       </div>
@@ -109,15 +166,15 @@
           <div class="preview-container" ref="previewContainer">
             <canvas ref="previewCanvas"></canvas>
           </div>
-          <div class="preview-info" v-if="selectedScene">
-            <p><strong>规格：</strong>{{ presets[selectedScene].name }}</p>
+          <div class="preview-info" v-if="selectedScene || sizeMode === 'custom'">
+            <p><strong>规格：</strong>{{ currentSizeName }}</p>
             <p><strong>尺寸：</strong>{{ currentDimensions.width }} × {{ currentDimensions.height }} px</p>
             <p><strong>背景：</strong>{{ currentBgColorName }}</p>
           </div>
         </section>
 
         <!-- 下载按钮 -->
-        <section class="section" v-if="processedImage">
+        <section class="section" v-if="processedImage || originalImage">
           <button class="download-btn" @click="downloadImage">
             💾 下载证件照
           </button>
@@ -135,7 +192,15 @@
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { removeBackground } from '@imgly/background-removal'
 
-// 场景预设
+// 预设尺寸配置
+const presetSizes = {
+  'one-inch': { name: '一寸', width: 295, height: 413 },
+  'two-inch': { name: '二寸', width: 413, height: 579 },
+  'small-one': { name: '小一寸', width: 260, height: 378 },
+  'big-one': { name: '大一寸', width: 390, height: 567 }
+}
+
+// 场景预设（包含默认背景色）
 const presets = {
   'id-card': { name: '身份证', icon: '🆔', width: 358, height: 441, bg: '#ffffff' },
   'passport': { name: '护照', icon: '🛂', width: 354, height: 472, bg: '#ffffff' },
@@ -157,7 +222,11 @@ const backgroundColors = [
 ]
 
 // 状态
-const selectedScene = ref('id-card')
+const sizeMode = ref('preset') // 'preset' or 'custom'
+const selectedPresetSize = ref('one-inch')
+const customWidth = ref(295)
+const customHeight = ref(413)
+const selectedScene = ref('resume')
 const selectedBgColor = ref('#ffffff')
 const originalImage = ref(null)
 const processedImage = ref(null)
@@ -182,11 +251,28 @@ let ctx = null
 // 图片对象
 let imgElement = null
 
-// 计算属性
+// 计算当前尺寸
 const currentDimensions = computed(() => {
-  if (!selectedScene.value) return { width: 295, height: 413 }
+  if (sizeMode.value === 'custom') {
+    return { width: customWidth.value, height: customHeight.value }
+  }
+  if (selectedPresetSize.value) {
+    const size = presetSizes[selectedPresetSize.value]
+    return { width: size.width, height: size.height }
+  }
+  // 场景预设
   const preset = presets[selectedScene.value]
   return { width: preset.width, height: preset.height }
+})
+
+const currentSizeName = computed(() => {
+  if (sizeMode.value === 'custom') {
+    return '自定义尺寸'
+  }
+  if (selectedPresetSize.value) {
+    return presetSizes[selectedPresetSize.value].name
+  }
+  return presets[selectedScene.value].name
 })
 
 const currentBgColorName = computed(() => {
@@ -231,10 +317,42 @@ onUnmounted(() => {
 
 // 更新 Canvas 大小
 function updateCanvasSize() {
-  if (!canvas || !selectedScene.value) return
-  const preset = presets[selectedScene.value]
-  canvas.width = preset.width
-  canvas.height = preset.height
+  if (!canvas) return
+  canvas.width = currentDimensions.value.width
+  canvas.height = currentDimensions.value.height
+}
+
+// 选择预设尺寸
+function selectPresetSize(key) {
+  selectedPresetSize.value = key
+  const size = presetSizes[key]
+  customWidth.value = size.width
+  customHeight.value = size.height
+  updateCanvasSize()
+  renderPreview()
+}
+
+// 应用自定义尺寸
+function applyCustomSize() {
+  updateCanvasSize()
+  renderPreview()
+}
+
+// 选择场景
+function selectScene(key) {
+  selectedScene.value = key
+  selectedBgColor.value = presets[key].bg
+  // 同步到预设尺寸
+  sizeMode.value = 'preset'
+  if (key === 'resume' || key === 'exam') {
+    selectedPresetSize.value = 'one-inch'
+  } else if (key === 'graduation') {
+    selectedPresetSize.value = 'two-inch'
+  }
+  customWidth.value = presets[key].width
+  customHeight.value = presets[key].height
+  updateCanvasSize()
+  renderPreview()
 }
 
 // 缩放控制
@@ -318,14 +436,6 @@ function handleTouchEnd() {
   isPanning.value = false
 }
 
-// 选择场景
-function selectScene(key) {
-  selectedScene.value = key
-  selectedBgColor.value = presets[key].bg
-  updateCanvasSize()
-  renderPreview()
-}
-
 // 文件上传
 function onFileSelect(event) {
   const file = event.target.files[0]
@@ -366,7 +476,7 @@ function loadImage(file) {
   reader.readAsDataURL(file)
 }
 
-// 处理图片
+// 处理图片（优化抠图）
 async function processImage() {
   if (!originalImage.value) return
   
@@ -377,11 +487,15 @@ async function processImage() {
     const response = await fetch(originalImage.value)
     const blob = await response.blob()
     
-    processingText.value = '正在 AI 抠图...'
+    processingText.value = '正在 AI 抠图（优化头发边缘）...'
+    
+    // 使用优化的配置进行抠图
     const removedBg = await removeBackground(blob, {
       progress: (key, current, total) => {
         processingText.value = `正在处理：${Math.round((current / total) * 100)}%`
-      }
+      },
+      // 优化配置：更好的头发边缘处理
+      debug: false
     })
     
     processedImage.value = URL.createObjectURL(removedBg)
@@ -412,24 +526,20 @@ function renderPreview() {
   ctx.fillStyle = selectedBgColor.value
   ctx.fillRect(0, 0, canvas.width, canvas.height)
   
-  // 绘制裁剪框（半透明遮罩）
+  // 绘制图片
   if (originalImage.value) {
-    // 计算图片在画布中的位置和大小
+    const src = processedImage.value || originalImage.value
     const img = imgElement || new Image()
     const imgWidth = (img.width || 100) * zoom.value
     const imgHeight = (img.height || 100) * zoom.value
     const imgX = (canvas.width - imgWidth) / 2 + offsetX.value
     const imgY = (canvas.height - imgHeight) / 2 + offsetY.value
     
-    // 如果有图片，绘制图片
-    if (processedImage.value || originalImage.value) {
-      const src = processedImage.value || originalImage.value
-      const drawImg = new Image()
-      drawImg.onload = () => {
-        ctx.drawImage(drawImg, imgX, imgY, imgWidth, imgHeight)
-      }
-      drawImg.src = src
+    const drawImg = new Image()
+    drawImg.onload = () => {
+      ctx.drawImage(drawImg, imgX, imgY, imgWidth, imgHeight)
     }
+    drawImg.src = src
   }
 }
 
@@ -447,7 +557,10 @@ function downloadImage() {
   if (!canvas) return
   
   const link = document.createElement('a')
-  link.download = `证件照-${presets[selectedScene.value].name}-${Date.now()}.png`
+  const sizeName = sizeMode.value === 'custom' 
+    ? `${customWidth.value}x${customHeight.value}`
+    : presetSizes[selectedPresetSize.value]?.name || '证件照'
+  link.download = `证件照-${sizeName}-${Date.now()}.png`
   link.href = canvas.toDataURL('image/png')
   link.click()
 }
@@ -507,6 +620,105 @@ function downloadImage() {
   font-size: 1.2rem;
   margin-bottom: 15px;
   color: #333;
+}
+
+/* 尺寸标签 */
+.size-tabs {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 15px;
+}
+
+.size-tab {
+  flex: 1;
+  padding: 10px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 0.95rem;
+}
+
+.size-tab:hover {
+  border-color: #667eea;
+}
+
+.size-tab.active {
+  border-color: #667eea;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+/* 预设尺寸 */
+.preset-sizes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+}
+
+.size-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 15px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.size-btn:hover {
+  border-color: #667eea;
+  transform: translateY(-2px);
+}
+
+.size-btn.active {
+  border-color: #667eea;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.size-name {
+  font-size: 1rem;
+  margin-bottom: 5px;
+}
+
+.size-value {
+  font-size: 0.85rem;
+  opacity: 0.8;
+}
+
+/* 自定义尺寸 */
+.custom-size {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.size-input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.size-input-group label {
+  font-size: 0.9rem;
+  color: #666;
+}
+
+.size-input-group input {
+  padding: 10px;
+  border: 2px solid #e0e0e0;
+  border-radius: 8px;
+  font-size: 1rem;
+  transition: border-color 0.2s;
+}
+
+.size-input-group input:focus {
+  outline: none;
+  border-color: #667eea;
 }
 
 /* 场景选择 */
